@@ -20,6 +20,14 @@ Repetiția spațiată: intervalele cresc la 1, 3, 7, 16, 35 și 80 de zile. Dac�
 ## Conținut
 `data/zi.js`, `data/calatorii.js`, `data/medical.js`: câte 8 unități, nivelurile 1-4, în total 486 de fraze-bloc, 48 de tipare, 48 de dialoguri și 72 de subiecte de vorbire. `data/pronuntie.js` conține 12 sunete problematice. Programul alternează cele trei domenii.
 
+## Voce naturală
+Toate frazele, dialogurile și exercițiile au înregistrări gata făcute în `audio/`, generate cu modelul neural gratuit Kokoro. Vocea principală e Emma (britanică), iar personajul B din dialoguri e George. Butonul Lent redă aceeași înregistrare la 70% din viteză. Dacă o înregistrare lipsește, aplicația folosește vocea telefonului. Din Progres > Setări poți opri vocea naturală.
+
+Ca să regenerezi după ce schimbi conținutul din `data/`:
+1. `node tools/collect-texts.js`
+2. `python tools/generate-audio.py <folder_model>`. Ai nevoie de `pip install kokoro-onnx soundfile` și de ffmpeg. Modelul e `onnx-community/Kokoro-82M-v1.0-ONNX` de pe Hugging Face: `onnx/model_quantized.onnx` redenumit `model.onnx`, plus vocile `bf_emma` și `bm_george` salvate în `voices.npz`.
+3. `python tools/build-dist.py`
+
 ## Telefon și PC
 Progres > Copiază codul pe un dispozitiv, apoi lipești codul pe celălalt și apeși Încarcă. Cele două progrese se combină, nu se suprascriu.
 
