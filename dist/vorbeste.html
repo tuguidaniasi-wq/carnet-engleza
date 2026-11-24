@@ -2202,7 +2202,29 @@ function pickVoice(){
   var pref=same.filter(function(v){ return /google|natural|neural|premium|enhanced|siri|daniel|serena|libby|sonia|ryan/i.test(v.name); });
   return pref[0]||same[0]||VOICES[0]||null;
 }
-function speak(text, rate){
+// Fișiere audio naturale (voce neurală, generate dinainte). Cheia = FNV-1a peste "voce|text", ca în tools/collect-texts.js
+function fnv(s){ var b=new TextEncoder().encode(s), h=0x811c9dc5; for(var i=0;i<b.length;i++){ h^=b[i]; h=Math.imul(h,0x01000193)>>>0; } return ('0000000'+h.toString(16)).slice(-8); }
+var PLAYER=new Audio(); PLAYER.preload='auto';
+function audioKey(text, who){ if(S.settings.natural===false) return null; var k=fnv((who==='B'?'bm_george':'bf_emma')+'|'+String(text).trim()); return (window.AUDIO_INDEX||{})[k]?k:null; }
+function stopAudio(){ try{ PLAYER.pause(); }catch(e){} try{ speechSynthesis.cancel(); }catch(e){} }
+function playFile(k, rate){
+  return new Promise(function(res, rej){
+    stopAudio();
+    var done=false, r=(rate||1)*S.settings.rate;
+    function ok(){ if(!done){ done=true; res(); } } function bad(e){ if(!done){ done=true; rej(e); } }
+    PLAYER.onended=ok; PLAYER.onerror=bad;
+    PLAYER.src='audio/'+k+'.mp3'; PLAYER.defaultPlaybackRate=r; PLAYER.playbackRate=r;
+    try{ PLAYER.preservesPitch=true; PLAYER.webkitPreservesPitch=true; }catch(e){}
+    var p=PLAYER.play(); if(p && p.catch) p.catch(bad);
+    setTimeout(ok, 20000);
+  });
+}
+function speak(text, rate, who){
+  var k=audioKey(text, who);
+  if(k) return playFile(k, rate).catch(function(){ return speakTTS(text, rate); });
+  return speakTTS(text, rate);
+}
+function speakTTS(text, rate){
   return new Promise(function(res){
     if(!('speechSynthesis' in window)) return res();
     try{
@@ -2296,7 +2318,7 @@ function micBlock(host, target, cb, opts){
 // ---------- navigare ----------
 var VIEW='azi';
 function go(v){
-  VIEW=v; document.body.classList.remove('in-session'); stopRec();
+  VIEW=v; document.body.classList.remove('in-session'); stopRec(); stopAudio();
   $$('.tabbar button').forEach(function(b){ b.classList.toggle('active', b.dataset.view===v); });
   (VIEWS[v]||VIEWS.azi)(); window.scrollTo(0,0); updateChips();
 }
@@ -2387,7 +2409,7 @@ function sessHead(){
 }
 function nextItem(){ SESS.ii++; var st=SESS.steps[SESS.si]; if(SESS.ii>=st.items.length){ SESS.si++; SESS.ii=0; } if(SESS.si>=SESS.steps.length) return finish(); renderStep(); }
 function renderStep(){
-  stopRec(); try{ speechSynthesis.cancel(); }catch(e){}
+  stopRec(); stopAudio();
   var st=SESS.steps[SESS.si]; SESS.tok++;
   var v=$('#view');
   v.innerHTML=sessHead()+'<div id="stage" class="stack fade"></div>';
@@ -2396,8 +2418,8 @@ function renderStep(){
   window.scrollTo(0,0);
 }
 function alive(tok){ return SESS && SESS.tok===tok; }
-function playBtns(text){ return '<div class="row"><button class="btn sm" data-p="1">'+ICON.play+' Ascultă</button><button class="btn sm" data-p=".7">'+ICON.slow+' Lent</button></div>'; }
-function bindPlay(host, text){ $$('[data-p]',host).forEach(function(b){ b.onclick=function(){ speak(text, parseFloat(b.dataset.p)); }; }); }
+function playBtns(text, who){ return '<div class="row"><button class="btn sm" data-p="1">'+ICON.play+' Ascultă</button><button class="btn sm" data-p=".7">'+ICON.slow+' Lent</button></div>'; }
+function bindPlay(host, text, who){ $$('[data-p]',host).forEach(function(b){ b.onclick=function(){ speak(text, parseFloat(b.dataset.p), who); }; }); }
 function result(host, o, target, extra){
   var h='<div class="reveal stack">';
   h+='<div class="prompt-en">'+esc(target)+'</div>';
@@ -2414,8 +2436,8 @@ STEP.warm=function(st, el, tok){
   el.innerHTML='<div class="card stack"><div class="eyebrow">Ascultă și repetă imediat, cu aceeași melodie</div>'+
     '<div class="prompt-en">'+esc(line.en)+'</div><div class="muted">'+esc(line.ro)+'</div>'+playBtns(line.en)+'<div id="m"></div></div>'+
     '<button class="btn block" id="nx">Mai departe '+ICON.next+'</button>';
-  bindPlay(el, line.en);
-  speak(line.en, .8).then(function(){ if(alive(tok)) return new Promise(function(r){ setTimeout(r,500); }); }).then(function(){ if(alive(tok)) speak(line.en, 1); });
+  bindPlay(el, line.en, line.who);
+  speak(line.en, .8, line.who).then(function(){ if(alive(tok)) return new Promise(function(r){ setTimeout(r,500); }); }).then(function(){ if(alive(tok)) speak(line.en, 1, line.who); });
   if(micOn()) micBlock($('#m'), line.en, function(o){ if(o.skipped) return nextItem(); $('#m').innerHTML='<div class="stack">'+scoreHTML(o.score)+diffHTML(o.r)+'</div>'; SESS.scores.push(o.score); }, {hint:'Repetă după vorbitor', skipLabel:'Sari peste'});
   $('#nx').onclick=nextItem;
 };
@@ -2565,15 +2587,15 @@ STEP.role=function(st, el, tok){
   if(cur.who==='A'){
     $('#dl').insertAdjacentHTML('beforeend','<div class="bubble a fade">'+esc(cur.en)+'<div class="ro">'+esc(cur.ro)+'</div></div>');
     act.innerHTML='<div class="row"><button class="btn sm" id="rp">'+ICON.play+' Repetă replica</button></div><button class="btn primary block" id="nx" style="margin-top:10px">Răspund '+ICON.next+'</button>';
-    $('#rp').onclick=function(){ speak(cur.en); };
-    speak(cur.en).then(function(){ if(alive(tok) && lines[SESS.ii+1] && lines[SESS.ii+1].who==='B') setTimeout(function(){ if(alive(tok)) nextItem(); }, 300); });
+    $('#rp').onclick=function(){ speak(cur.en, 1, 'A'); };
+    speak(cur.en, 1, 'A').then(function(){ if(alive(tok) && lines[SESS.ii+1] && lines[SESS.ii+1].who==='B') setTimeout(function(){ if(alive(tok)) nextItem(); }, 300); });
     $('#nx').onclick=nextItem;
   } else {
     act.innerHTML='<div class="card stack"><div class="eyebrow">Spune în engleză</div><div class="prompt-ro">'+esc(cur.ro)+'</div><div id="m"></div></div>';
     micBlock($('#m'), cur.en, function(o){
       var host=$('.card',act); $('#m').remove();
       result(host, o, cur.en, playBtns(cur.en)+'<button class="btn primary block" id="nx">Continuă '+ICON.next+'</button>');
-      bindPlay(host, cur.en); $('#nx').onclick=nextItem;
+      bindPlay(host, cur.en, 'B'); speak(cur.en, 1, 'B'); $('#nx').onclick=nextItem;
     });
   }
 };
@@ -2613,18 +2635,22 @@ VIEWS.program=function(){
       return '<button class="unit '+cls+'" data-u="'+u.id+'"><span class="num">'+(i+1)+'</span><span class="u-body"><span class="row"><span class="tag '+u.topic+'">'+TOPIC_NAME[u.topic]+'</span><span class="muted small">nivel '+u.level+'</span></span><span class="u-title">'+esc(u.title_ro)+'</span><span class="bar ok"><i style="width:'+Math.round(p*100)+'%"></i></span></span></button>'; }).join('')+'</div>';
   $$('[data-u]').forEach(function(b){ b.onclick=function(){ unitView(b.dataset.u); }; });
 };
+var playSeq=0;
 function unitView(id){
   var u=UNITS.filter(function(x){return x.id===id;})[0], v=$('#view');
   v.innerHTML='<div class="stack fade"><button class="x" id="bk">← Program</button><div class="row"><span class="tag '+u.topic+'">'+TOPIC_NAME[u.topic]+'</span><span class="muted small">nivel '+u.level+'</span></div><h1>'+esc(u.title_ro)+'</h1>'+
     '<button class="btn brand block" id="focus">'+(S.focusUnit===u.id?'Unitatea asta e fixată ca următoare':'Lucrează unitatea asta în sesiunile următoare')+'</button>'+
     '<div class="card flat"><h3>Fraze</h3>'+u.chunks.map(function(c){ var s=stage(S.cards[c.id]); return '<div class="list-item"><div class="grow"><b>'+esc(c.en)+'</b><div class="muted small">'+esc(c.ro)+'</div></div><span class="tag">'+({nou:'nouă',invat:'în lucru',cons:'consolidare',stap:'stăpânită'})[s]+'</span><button class="icon-btn" data-say="'+esc(c.en)+'">'+ICON.play+'</button></div>'; }).join('')+'</div>'+
     '<div class="card flat stack"><h3>Tipare</h3>'+u.patterns.map(function(p){ return '<div><b>'+esc(p.frame)+'</b> <span class="muted small">'+esc(p.ro)+'</span><div class="helpers" style="margin-top:6px">'+p.fills.map(function(f){return '<span>'+esc(f.en)+'</span>';}).join('')+'</div></div>'; }).join('')+'</div>'+
-    u.dialogues.map(function(d){ return '<div class="card flat stack"><h3>'+esc(d.title_ro)+'</h3><div class="dlg">'+d.lines.map(function(l){ return '<div class="bubble '+(l.who==='A'?'a':'b')+'">'+esc(l.en)+'<div class="ro">'+esc(l.ro)+'</div></div>'; }).join('')+'</div><button class="btn sm" data-dlg="'+esc(d.lines.map(function(l){return l.en;}).join(' '))+'">'+ICON.play+' Ascultă tot dialogul</button></div>'; }).join('')+
+    u.dialogues.map(function(d){ return '<div class="card flat stack"><h3>'+esc(d.title_ro)+'</h3><div class="dlg">'+d.lines.map(function(l){ return '<div class="bubble '+(l.who==='A'?'a':'b')+'">'+esc(l.en)+'<div class="ro">'+esc(l.ro)+'</div></div>'; }).join('')+'</div><button class="btn sm" data-dlg="'+esc(JSON.stringify(d.lines.map(function(l){return [l.who,l.en];})))+'">'+ICON.play+' Ascultă tot dialogul</button></div>'; }).join('')+
   '</div>';
   $('#bk').onclick=function(){ go('program'); };
   $('#focus').onclick=function(){ S.focusUnit=u.id; save(); toast('Următoarea sesiune pornește cu această unitate.'); unitView(id); };
   $$('[data-say]').forEach(function(b){ b.onclick=function(){ speak(b.dataset.say); }; });
-  $$('[data-dlg]').forEach(function(b){ b.onclick=function(){ speak(b.dataset.dlg); }; });
+  $$('[data-dlg]').forEach(function(b){ b.onclick=function(){
+    var lines=JSON.parse(b.dataset.dlg), i=0, my=++playSeq;
+    (function nx(){ if(i>=lines.length || my!==playSeq) return; var l=lines[i++]; speak(l[1],1,l[0]).then(function(){ setTimeout(nx,350); }); })();
+  }; });
   window.scrollTo(0,0);
 }
 
@@ -2695,7 +2721,8 @@ VIEWS.progres=function(){
       '<textarea id="code" placeholder="Lipește aici codul de pe celălalt dispozitiv"></textarea><button class="btn brand sm" id="imp">Încarcă progresul</button></div>'+
     '<div class="card flat stack"><h3>Setări</h3>'+
       '<label class="small"><b>Accent</b><select id="acc"><option value="en-GB">Britanic</option><option value="en-US">American</option></select></label>'+
-      '<label class="small"><b>Voce</b><select id="vc"><option value="">Automat</option>'+voices+'</select></label>'+
+      '<label class="opt"><input type="checkbox" id="nat" '+(S.settings.natural!==false?'checked':'')+'> Voce naturală (Emma și George, înregistrate)</label>'+
+      '<label class="small"><b>Voce de rezervă</b> <span class="muted">(vocea telefonului, folosită doar dacă lipsește înregistrarea)</span><select id="vc"><option value="">Automat</option>'+voices+'</select></label>'+
       '<label class="small"><b>Viteza vocii</b><select id="rt"><option value="0.85">Mai lent</option><option value="1">Normal</option><option value="1.1">Mai rapid</option></select></label>'+
       '<label class="small"><b>Fraze noi pe zi</b><select id="np"><option value="3">3 (zile aglomerate)</option><option value="5">5 (recomandat)</option><option value="7">7 (intensiv)</option></select></label>'+
       '<label class="small"><b>Temă</b><select id="th"><option value="auto">Automat</option><option value="light">Luminoasă</option><option value="dark">Întunecată</option></select></label>'+
@@ -2706,10 +2733,11 @@ VIEWS.progres=function(){
     '</div></div>';
   $('#acc').value=S.settings.accent; $('#rt').value=String(S.settings.rate); $('#np').value=String(S.settings.newPerDay); $('#th').value=S.settings.theme;
   $('#acc').onchange=function(e){ S.settings.accent=e.target.value; S.settings.voice=''; save(); VIEWS.progres(); };
-  $('#vc').onchange=function(e){ S.settings.voice=e.target.value; save(); speak('Hello. This is my voice.'); };
+  $('#vc').onchange=function(e){ S.settings.voice=e.target.value; save(); speakTTS('Hello. This is my voice.'); };
   $('#rt').onchange=function(e){ S.settings.rate=parseFloat(e.target.value); save(); };
   $('#np').onchange=function(e){ S.settings.newPerDay=parseInt(e.target.value,10); save(); };
   $('#th').onchange=function(e){ S.settings.theme=e.target.value; save(); applyTheme(); };
+  $('#nat').onchange=function(e){ S.settings.natural=e.target.checked; save(); speak('Could you say that again, please?'); };
   $('#mc').onchange=function(e){ S.settings.mic=e.target.checked; save(); };
   $$('[data-tp]').forEach(function(b){ b.onchange=function(){ S.settings.topics[b.dataset.tp]=b.checked; save(); }; });
   $('#test').onclick=function(){ speak('Could you say that again, please?'); };
